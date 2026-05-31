@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实时数据大屏</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0f1923;
+            color: #fff;
+            font-family: 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-rows: 80px 1fr 200px;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+            padding: 16px;
+            height: 100vh;
+        }
+        .header {
+            grid-column: 1 / 4;
+            background: linear-gradient(135deg, #1a2a3a, #0d1b2a);
+            border: 1px solid #1e3a5f;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 30px;
+        }
+        .header h1 {
+            font-size: 28px;
+            background: linear-gradient(90deg, #00d4ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .status {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+        }
+        .status .dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+        .dot.green { background: #00ff88; box-shadow: 0 0 8px #00ff88; }
+        .dot.red { background: #ff4757; box-shadow: 0 0 8px #ff4757; }
+        .chart-card {
+            background: linear-gradient(135deg, #1a2a3a, #0d1b2a);
+            border: 1px solid #1e3a5f;
+            border-radius: 8px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+        }
+        .chart-card h3 {
+            font-size: 16px;
+            color: #8892a0;
+            margin-bottom: 10px;
+        }
+        .chart-container {
+            flex: 1;
+            min-height: 0;
+        }
+        .bottom-panel {
+            grid-column: 1 / 4;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        .rank-list {
+            list-style: none;
+            padding: 0;
+        }
+        .rank-list li {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #1e3a5f;
+            font-size: 14px;
+        }
+        .rank-list li .rank {
+            color: #00d4ff;
+            font-weight: bold;
+            width: 30px;
+        }
+        .rank-list li .value {
+            color: #00ff88;
+        }
+        .metric-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #00d4ff;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .metric-label {
+            font-size: 14px;
+            color: #8892a0;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <div class="dashboard">
+        <!-- 顶部标题栏 -->
+        <div class="header">
+            <h1>📊 实时数据大屏</h1>
+            <div class="status">
+                <span><span class="dot" :class="wsConnected ? 'green' : 'red'"></span>WebSocket {{ wsConnected ? '已连接' : '未连接' }}</span>
+                <span>在线人数: {{ onlineCount }}</span>
+                <span>{{ currentTime }}</span>
+            </div>
+        </div>
+
+        <!-- QPS 实时曲线 -->
+        <div class="chart-card">
+            <h3>📈 QPS 实时趋势</h3>
+            <div ref="qpsChart" class="chart-container"></div>
+        </div>
+
+        <!-- 响应时间分布 -->
+        <div class="chart-card">
+            <h3>⏱️ 响应时间 (ms)</h3>
+            <div ref="rtChart" class="chart-container"></div>
+        </div>
+
+        <!-- 指标概览 -->
+        <div class="chart-card">
+            <h3>📋 指标概览</h3>
+            <div class="metric-value">{{ currentQps }}</div>
+            <div class="metric-label">当前 QPS</div>
+            <div class="metric-value" style="color: #00ff88;">{{ currentRt }}ms</div>
+            <div class="metric-label">平均响应时间</div>
+        </div>
+
+        <!-- 底部面板 -->
+        <div class="bottom-panel">
+            <!-- 热点排行 -->
+            <div class="chart-card">
+                <h3>🔥 热点接口排行</h3>
+                <ul class="rank-list">
+                    <li v-for="(item, index) in topApis" :key="index">
+                        <span><span class="rank">{{ index + 1 }}</span> {{ item.name }}</span>
+                        <span class="value">{{ item.count }} 次</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- 系统监控 -->
+            <div class="chart-card">
+                <h3>🖥️ 系统监控</h3>
+                <div ref="systemChart" class="chart-container"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const { createApp, ref, onMounted, onUnmounted, nextTick } = Vue;
+
+createApp({
+    setup() {
+        // 状态
+        const wsConnected = ref(false);
+        const onlineCount = ref(0);
+        const currentTime = ref('');
+        const currentQps = ref(0);
+        const currentRt = ref(0);
+        const topApis = ref([]);
+
+        // 图表引用
+        const qpsChart = ref(null);
+        const rtChart = ref(null);
+        const systemChart = ref(null);
+
+        // 图表实例
+        let qpsChartInstance = null;
+        let rtChartInstance = null;
+        let systemChartInstance = null;
+
+        // WebSocket
+        let ws = null;
+        let reconnectTimer = null;
+        let timeTimer = null;
+
+        // 数据缓存
+        const qpsData = [];
+        const rtData = [];
+        const timeLabels = [];
+
+        // 初始化图表
+        const initCharts = () => {
+            qpsChartInstance = echarts.init(qpsChart.value);
+            rtChartInstance = echarts.init(rtChart.value);
+            systemChartInstance = echarts.init(systemChart.value);
+
+            // QPS 图表配置
+            qpsChartInstance.setOption({
+                grid: { top: 10, right: 20, bottom: 30, left: 50 },
+                xAxis: { type: 'category', data: [], axisLabel: { color: '#8892a0' }, axisLine: { lineStyle: { color: '#1e3a5f' } } },
+                yAxis: { type: 'value', scale: true, axisLabel: { color: '#8892a0' }, splitLine: { lineStyle: { color: '#1e3a5f' } } },
+                series: [{
+                    type: 'line',
+                    data: [],
+                    smooth: true,
+                    lineStyle: { color: '#00d4ff', width: 2 },
+                    areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(0,212,255,0.3)' }, { offset: 1, color: 'rgba(0,212,255,0)' }] } },
+                    itemStyle: { color: '#00d4ff' },
+                    symbol: 'circle',
+                    symbolSize: 4
+                }],
+                tooltip: { trigger: 'axis', backgroundColor: '#1a2a3a', borderColor: '#1e3a5f', textStyle: { color: '#fff' } }
+            });
+
+            // RT 图表配置
+            rtChartInstance.setOption({
+                grid: { top: 10, right: 20, bottom: 30, left: 50 },
+                xAxis: { type: 'category', data: [], axisLabel: { color: '#8892a0' }, axisLine: { lineStyle: { color: '#1e3a5f' } } },
+                yAxis: { type: 'value', scale: true, axisLabel: { color: '#8892a0' }, splitLine: { lineStyle: { color: '#1e3a5f' } } },
+                series: [{
+                    type: 'bar',
+                    data: [],
+                    itemStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: '#00ff88' }, { offset: 1, color: '#00d4ff' }] } },
+                    barWidth: '60%'
+                }],
+                tooltip: { trigger: 'axis', backgroundColor: '#1a2a3a', borderColor: '#1e3a5f', textStyle: { color: '#fff' } }
+            });
+
+            // 系统监控饼图
+            systemChartInstance.setOption({
+                series: [{
+                    type: 'gauge',
+                    progress: { show: true, width: 18 },
+                    axisLine: { lineStyle: { width: 18, color: [[0.3, '#00ff88'], [0.7, '#00d4ff'], [1, '#ff4757']] } },
+                    axisTick: { show: false },
+                    splitLine: { show: false },
+                    axisLabel: { show: false },
+                    pointer: { show: false },
+                    title: { show: true, offsetCenter: [0, '70%'], color: '#8892a0' },
+                    detail: { valueAnimation: true, fontSize: 24, color: '#00d4ff', offsetCenter: [0, '40%'] },
+                    data: [{ value: 0, name: 'CPU 使用率' }]
+                }]
+            });
+
+            // 响应窗口大小变化
+            window.addEventListener('resize', () => {
+                qpsChartInstance?.resize();
+                rtChartInstance?.resize();
+                systemChartInstance?.resize();
+            });
+        };
+
+        // WebSocket 连接
+        const connectWS = () => {
+            // Netty WebSocket 端口 9090 (通过 Nginx 代理则使用当前 host)
+            const wsHost = window.location.hostname || 'localhost';
+            const wsPort = window.location.port || '9090';
+            const wsUrl = `ws://${wsHost}:${wsPort}/ws/dashboard`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                wsConnected.value = true;
+                console.log('WebSocket 已连接');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    handleMessage(msg);
+                } catch (e) {
+                    console.error('解析消息失败:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                wsConnected.value = false;
+                console.log('WebSocket 断开，5 秒后重连...');
+                reconnectTimer = setTimeout(connectWS, 5000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket 错误:', err);
+                ws.close();
+            };
+
+            // 心跳 (每 30 秒)
+            setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send('ping');
+                }
+            }, 30000);
+        };
+
+        // 处理消息
+        const handleMessage = (msg) => {
+            if (msg.type === 'system') {
+                if (msg.data.onlineCount) onlineCount.value = msg.data.onlineCount;
+            } else if (msg.type === 'metric') {
+                const data = msg.data;
+                if (data.metricName === 'qps') {
+                    currentQps.value = Math.round(data.avg);
+                    updateQpsChart(data);
+                } else if (data.metricName === 'rt') {
+                    currentRt.value = Math.round(data.avg);
+                    updateRtChart(data);
+                }
+            }
+        };
+
+        // 节流：每 2 秒更新一次图表
+        let lastChartUpdate = 0;
+        let pendingQps = null;
+        let pendingRt = null;
+        const CHART_INTERVAL = 2000;
+
+        const flushCharts = () => {
+            const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            timeLabels.push(time);
+            if (timeLabels.length > 15) timeLabels.shift();
+
+            if (pendingQps !== null) {
+                qpsData.push(pendingQps);
+                if (qpsData.length > 15) qpsData.shift();
+                pendingQps = null;
+            }
+            if (pendingRt !== null) {
+                rtData.push(pendingRt);
+                if (rtData.length > 15) rtData.shift();
+                pendingRt = null;
+            }
+
+            qpsChartInstance?.setOption({
+                xAxis: { data: timeLabels },
+                series: [{ data: qpsData }]
+            });
+            rtChartInstance?.setOption({
+                xAxis: { data: timeLabels },
+                series: [{ data: rtData }]
+            });
+        };
+
+        // 更新 QPS 图表
+        const updateQpsChart = (data) => {
+            pendingQps = Math.round(data.avg);
+            const now = Date.now();
+            if (now - lastChartUpdate >= CHART_INTERVAL) {
+                lastChartUpdate = now;
+                flushCharts();
+            }
+        };
+
+        // 更新 RT 图表
+        const updateRtChart = (data) => {
+            pendingRt = Math.round(data.avg);
+            const now = Date.now();
+            if (now - lastChartUpdate >= CHART_INTERVAL) {
+                lastChartUpdate = now;
+                flushCharts();
+            }
+        };
+
+        // 更新时间
+        const updateTime = () => {
+            timeTimer = setInterval(() => {
+                currentTime.value = new Date().toLocaleString('zh-CN', { hour12: false });
+            }, 1000);
+        };
+
+        // 模拟数据 (用于演示，实际项目中由后端推送)
+        const startMockData = () => {
+            let qps = 1000;
+            setInterval(() => {
+                qps = Math.max(500, Math.min(3000, qps + (Math.random() - 0.5) * 200));
+                const rt = Math.max(10, Math.min(200, 50 + (Math.random() - 0.5) * 80));
+                const now = Date.now();
+
+                // 模拟消息
+                handleMessage({
+                    type: 'metric',
+                    data: { metricName: 'qps', avg: qps, max: qps * 1.2, min: qps * 0.8, sum: qps * 5, count: 5, windowEnd: now }
+                });
+                handleMessage({
+                    type: 'metric',
+                    data: { metricName: 'rt', avg: rt, max: rt * 1.5, min: rt * 0.5, sum: rt * 5, count: 5, windowEnd: now }
+                });
+
+                // 模拟 CPU
+                const cpu = 30 + Math.random() * 40;
+                systemChartInstance?.setOption({
+                    series: [{ data: [{ value: Math.round(cpu), name: 'CPU 使用率' }] }]
+                });
+
+                // 模拟排行
+                topApis.value = [
+                    { name: '/api/user/info', count: Math.round(5000 + Math.random() * 2000) },
+                    { name: '/api/order/list', count: Math.round(3000 + Math.random() * 1500) },
+                    { name: '/api/product/detail', count: Math.round(2000 + Math.random() * 1000) },
+                    { name: '/api/metric/report', count: Math.round(1500 + Math.random() * 800) },
+                    { name: '/api/search', count: Math.round(800 + Math.random() * 500) },
+                ].sort((a, b) => b.count - a.count);
+            }, 2000);
+        };
+
+        onMounted(() => {
+            nextTick(() => {
+                initCharts();
+                connectWS();
+                updateTime();
+            });
+        });
+
+        onUnmounted(() => {
+            ws?.close();
+            clearInterval(timeTimer);
+            clearTimeout(reconnectTimer);
+            qpsChartInstance?.dispose();
+            rtChartInstance?.dispose();
+            systemChartInstance?.dispose();
+        });
+
+        return {
+            wsConnected, onlineCount, currentTime,
+            currentQps, currentRt, topApis,
+            qpsChart, rtChart, systemChart
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>

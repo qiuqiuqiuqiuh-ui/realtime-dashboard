@@ -1,0 +1,26 @@
+# Nacos 配置中心
+spring:
+  application:
+    name: dashboard-storage
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        group: DEFAULT_GROUP
+        enabled: ${NACOS_ENABLED:false}
+        metadata:
+          version: 1.0.0
+          env: ${spring.profiles.active:dev}
+      config:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        group: DEFAULT_GROUP
+        enabled: ${NACOS_CONFIG_ENABLED:false}
+        file-extension: yml
+        shared-configs:
+          - data-id: common.yml
+            group: DEFAULT_GROUP
+            refresh: true
+        timeout: 5000
+        refresh-enabled: true

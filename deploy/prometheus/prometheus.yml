@@ -1,0 +1,33 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Prometheus 自身
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Gateway 服务
+  - job_name: 'dashboard-gateway'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['gateway:8080']
+        labels:
+          service: 'gateway'
+
+  # Collector 服务
+  - job_name: 'dashboard-collector'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['collector:8081']
+        labels:
+          service: 'collector'
+
+  # Storage 服务
+  - job_name: 'dashboard-storage'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['storage:8082']
+        labels:
+          service: 'storage'

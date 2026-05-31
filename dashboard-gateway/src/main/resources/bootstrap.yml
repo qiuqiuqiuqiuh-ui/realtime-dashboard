@@ -1,0 +1,33 @@
+# Nacos 配置中心 - bootstrap.yml 优先级高于 application.yml
+# Spring Cloud 从 Nacos 读取配置后，再加载 application.yml
+spring:
+  application:
+    name: dashboard-gateway
+  cloud:
+    nacos:
+      # 服务注册发现
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        group: DEFAULT_GROUP
+        enabled: ${NACOS_ENABLED:false}
+        # 元数据 - 用于服务治理
+        metadata:
+          version: 1.0.0
+          env: ${spring.profiles.active:dev}
+      # 配置中心
+      config:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        group: DEFAULT_GROUP
+        enabled: ${NACOS_CONFIG_ENABLED:false}
+        file-extension: yml
+        # 共享配置 (多服务共用)
+        shared-configs:
+          - data-id: common.yml
+            group: DEFAULT_GROUP
+            refresh: true
+        # 拉取配置超时
+        timeout: 5000
+        # 配置刷新
+        refresh-enabled: true
